@@ -39,6 +39,7 @@ type NetworkManager interface {
 	WIFIState() WIFIState
 	UpdateWIFIState(ctx context.Context)
 	ResetNetwork(ctx context.Context)
+	UpdateDNS()
 	FlushSystemDNSCache()
 	ReleaseMemory(ctx context.Context)
 }

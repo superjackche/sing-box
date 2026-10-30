@@ -159,8 +159,12 @@ func (m *platformDefaultInterfaceMonitor) updateDefaultInterface(interfaceName s
 	oldDNSServers := m.defaultDNSServers
 	m.defaultInterface = newInterface
 	m.defaultDNSServers = m.readDNSServers(newInterface.Index)
-	if m.defaultInterfaceInitialized && oldInterface != nil && oldInterface.Name == m.defaultInterface.Name && oldInterface.Index == m.defaultInterface.Index && slices.Equal(oldDNSServers, m.defaultDNSServers) {
+	if m.defaultInterfaceInitialized && sameDefaultInterface(oldInterface, newInterface) {
+		dnsChanged := !slices.Equal(oldDNSServers, m.defaultDNSServers)
 		m.defaultInterfaceAccess.Unlock()
+		if dnsChanged {
+			m.networkManager.UpdateDNS()
+		}
 		return
 	}
 	m.defaultInterfaceInitialized = true
@@ -184,11 +188,8 @@ func (m *platformDefaultInterfaceMonitor) updateDNSServers() {
 		return
 	}
 	m.defaultDNSServers = dnsServers
-	callbacks := m.callbacks.Array()
 	m.defaultInterfaceAccess.Unlock()
-	for _, callback := range callbacks {
-		callback(defaultInterface, 0)
-	}
+	m.networkManager.UpdateDNS()
 }
 
 func (m *platformDefaultInterfaceMonitor) readDNSServers(interfaceIndex int) []string {
@@ -216,4 +217,17 @@ func (m *platformDefaultInterfaceMonitor) MyInterfaces() []string {
 	m.defaultInterfaceAccess.Lock()
 	defer m.defaultInterfaceAccess.Unlock()
 	return m.myInterfaces
+}
+
+func sameDefaultInterface(oldInterface, newInterface *control.Interface) bool {
+	return oldInterface != nil &&
+		oldInterface.Name == newInterface.Name &&
+		oldInterface.Index == newInterface.Index &&
+		oldInterface.MTU == newInterface.MTU &&
+		oldInterface.Flags == newInterface.Flags &&
+		slices.Equal(oldInterface.HardwareAddr, newInterface.HardwareAddr) &&
+		len(oldInterface.Addresses) == len(newInterface.Addresses) &&
+		common.All(oldInterface.Addresses, func(address netip.Prefix) bool {
+			return slices.Contains(newInterface.Addresses, address)
+		})
 }

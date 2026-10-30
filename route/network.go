@@ -65,7 +65,7 @@ type NetworkManager struct {
 	startedCtx              context.Context
 	interfaceUpdateAccess   sync.Mutex
 	interfaceUpdateCancel   context.CancelFunc
-	networkResetPending     bool
+	networkUpdatePending    networkUpdateKind
 	resetRunAccess          sync.Mutex
 	powerUpdateAccess       sync.Mutex
 	powerUpdateCancel       context.CancelFunc
@@ -534,10 +534,27 @@ func (r *NetworkManager) ReleaseMemory(ctx context.Context) {
 	}
 }
 
+type networkUpdateKind uint8
+
+const (
+	networkUpdateNone networkUpdateKind = iota
+	networkUpdateDNS
+	networkUpdateInterface
+)
+
 func (r *NetworkManager) notifyInterfaceUpdate(_ *control.Interface, _ int) {
+	r.postNetworkUpdate(networkUpdateInterface)
+}
+
+func (r *NetworkManager) UpdateDNS() {
+	r.postNetworkUpdate(networkUpdateDNS)
+}
+
+func (r *NetworkManager) postNetworkUpdate(kind networkUpdateKind) {
 	r.interfaceUpdateAccess.Lock()
 	defer r.interfaceUpdateAccess.Unlock()
-	r.networkResetPending = true
+	// A DNS notification must not downgrade a pending interface reset.
+	r.networkUpdatePending = max(r.networkUpdatePending, kind)
 	if r.startedCtx != nil {
 		r.dispatchInterfaceUpdateLocked()
 	}
@@ -598,13 +615,17 @@ func (r *NetworkManager) updateInterface(ctx context.Context, defaultInterface *
 	}
 	r.updateNetworkEnvironment()
 	r.interfaceUpdateAccess.Lock()
-	resetNetwork := ctx.Err() == nil && r.networkResetPending
-	if resetNetwork {
-		r.networkResetPending = false
+	updateKind := networkUpdateNone
+	if ctx.Err() == nil {
+		updateKind = r.networkUpdatePending
+		r.networkUpdatePending = networkUpdateNone
 	}
 	r.interfaceUpdateAccess.Unlock()
-	if resetNetwork {
+	switch updateKind {
+	case networkUpdateInterface:
 		r.ResetNetwork(ctx)
+	case networkUpdateDNS:
+		service.FromContext[adapter.DNSRouter](r.ctx).ResetNetwork()
 	}
 }
 
