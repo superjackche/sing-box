@@ -14,6 +14,7 @@ import (
 	"github.com/sagernet/sing-box/dns"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/control"
 	"github.com/sagernet/sing/service"
 )
 
@@ -62,14 +63,18 @@ func TestDNSOnlyChangePreservesTrackedConnection(t *testing.T) {
 
 	waitDNSReset(t, probe)
 
+	fullUpdates := make(chan struct{}, 8)
+	monitor.RegisterCallback(func(*control.Interface, int) { fullUpdates <- struct{}{} })
 	for _, testCase := range []struct {
 		name             string
 		platformCallback bool
 		addressChange    bool
+		dnsChange        bool
 	}{
-		{name: "DNS watcher"},
-		{name: "platform callback", platformCallback: true},
-		{name: "address change with DNS change", platformCallback: true, addressChange: true},
+		{name: "DNS watcher", dnsChange: true},
+		{name: "platform callback", platformCallback: true, dnsChange: true},
+		{name: "address change with DNS change", platformCallback: true, addressChange: true, dnsChange: true},
+		{name: "address change without DNS change", platformCallback: true, addressChange: true},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			conn, peer := net.Pipe()
@@ -78,7 +83,9 @@ func TestDNSOnlyChangePreservesTrackedConnection(t *testing.T) {
 			defer peer.Close()
 			// Simulate a stale DNS snapshot without changing system configuration.
 			monitor.defaultInterfaceAccess.Lock()
-			monitor.defaultDNSServers = []string{"previous-configuration"}
+			if testCase.dnsChange {
+				monitor.defaultDNSServers = []string{"previous-configuration"}
+			}
 			if testCase.addressChange {
 				previous := *monitor.defaultInterface
 				previous.Addresses = nil
@@ -92,9 +99,21 @@ func TestDNSOnlyChangePreservesTrackedConnection(t *testing.T) {
 			}
 			// Reset is the last operation in the real NetworkManager update path.
 			// Waiting here prevents a successful read from racing ahead of CloseAll.
-			waitDNSReset(t, probe)
+			if testCase.dnsChange {
+				waitDNSReset(t, probe)
+			}
+			select {
+			case <-fullUpdates:
+				if !(testCase.addressChange && testCase.dnsChange) {
+					t.Fatal("unexpected full interface update")
+				}
+			default:
+				if testCase.addressChange && testCase.dnsChange {
+					t.Fatal("missing full interface update")
+				}
+			}
 			peer.SetReadDeadline(time.Now().Add(5 * time.Second))
-			if testCase.addressChange {
+			if testCase.addressChange && testCase.dnsChange {
 				if _, err := peer.Read(make([]byte, 1)); err != io.EOF {
 					t.Fatalf("real interface change must still close the connection: %v", err)
 				}

@@ -159,12 +159,14 @@ func (m *platformDefaultInterfaceMonitor) updateDefaultInterface(interfaceName s
 	oldDNSServers := m.defaultDNSServers
 	m.defaultInterface = newInterface
 	m.defaultDNSServers = m.readDNSServers(newInterface.Index)
-	if m.defaultInterfaceInitialized && sameDefaultInterface(oldInterface, newInterface) {
-		dnsChanged := !slices.Equal(oldDNSServers, m.defaultDNSServers)
+	// Preserve the existing deduplication of non-DNS platform notifications.
+	if m.defaultInterfaceInitialized && oldInterface != nil && oldInterface.Name == newInterface.Name && oldInterface.Index == newInterface.Index && slices.Equal(oldDNSServers, m.defaultDNSServers) {
 		m.defaultInterfaceAccess.Unlock()
-		if dnsChanged {
-			m.networkManager.UpdateDNS()
-		}
+		return
+	}
+	if m.defaultInterfaceInitialized && sameDefaultInterface(oldInterface, newInterface) {
+		m.defaultInterfaceAccess.Unlock()
+		m.networkManager.UpdateDNS()
 		return
 	}
 	m.defaultInterfaceInitialized = true
